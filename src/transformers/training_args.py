@@ -40,6 +40,7 @@ from .utils import (
     ExplicitEnum,
     cached_property,
     is_accelerate_available,
+    is_ipex_available,
     is_safetensors_available,
     is_sagemaker_dp_enabled,
     is_sagemaker_mp_enabled,
@@ -426,8 +427,9 @@ class TrainingArguments:
             use the corresponding output (usually index 2) as the past state and feed it to the model at the next
             training step under the keyword argument `mems`.
         run_name (`str`, *optional*, defaults to `output_dir`):
-            A descriptor for the run. Typically used for [wandb](https://www.wandb.com/) and
-            [mlflow](https://www.mlflow.org/) logging. If not specified, will be the same as `output_dir`.
+            A descriptor for the run. Typically used for [wandb](https://www.wandb.com/),
+            [mlflow](https://www.mlflow.org/) and [comet](https://www.comet.com/site) logging. If not specified, will
+            be the same as `output_dir`.
         disable_tqdm (`bool`, *optional*):
             Whether or not to disable the tqdm progress bars and table of metrics produced by
             [`~notebook.NotebookTrainingTracker`] in Jupyter Notebooks. Will default to `True` if the logging level is
@@ -772,8 +774,11 @@ class TrainingArguments:
             that takes a boolean argument `compute_result`, which when passed `True`, will trigger the final global
             summary statistics from the batch-level summary statistics you've accumulated over the evaluation set.
 
-        eval_on_start(`bool`, *optional*, defaults to `False`):
+        eval_on_start (`bool`, *optional*, defaults to `False`):
             Whether to perform a evaluation step (sanity check) before the training to ensure the validation steps works correctly.
+
+        eval_use_gather_object (`bool`, *optional*, defaults to `False`):
+            Whether to run recursively gather object in a nested list/tuple/dictionary of objects from all devices.
     """
 
     framework = "pt"
@@ -1127,7 +1132,8 @@ class TrainingArguments:
     )
 
     run_name: Optional[str] = field(
-        default=None, metadata={"help": "An optional descriptor for the run. Notably used for wandb logging."}
+        default=None,
+        metadata={"help": "An optional descriptor for the run. Notably used for wandb, mlflow and comet logging."},
     )
     disable_tqdm: Optional[bool] = field(
         default=None, metadata={"help": "Whether or not to disable the tqdm progress bars."}
@@ -1461,6 +1467,13 @@ class TrainingArguments:
         default=False,
         metadata={
             "help": "Whether to run through the entire `evaluation` step at the very beginning of training as a sanity check."
+        },
+    )
+
+    eval_use_gather_object: Optional[bool] = field(
+        default=False,
+        metadata={
+            "help": "Whether to run recursively gather object in a nested list/tuple/dictionary of objects from all devices."
         },
     )
 
@@ -1991,6 +2004,12 @@ class TrainingArguments:
                 FutureWarning,
             )
 
+        if self.eval_use_gather_object and not is_accelerate_available("0.30.0"):
+            raise ValueError(
+                "--eval_use_gather_object requires Accelerate to be version of `accelerate` < 0.30.0."
+                "This is not supported and we recommend you to update your version."
+            )
+
     def __str__(self):
         self_as_dict = asdict(self)
 
@@ -2136,6 +2155,8 @@ class TrainingArguments:
             if self.use_cpu:
                 device = torch.device("cpu")
             elif is_torch_xpu_available():
+                if not is_ipex_available() and not is_accelerate_available("0.32.0.dev"):
+                    raise ImportError("Using the XPU PyTorch backend requires `accelerate>=0.32.0.dev`")
                 device = torch.device("xpu:0")
                 torch.xpu.set_device(device)
             elif is_torch_mlu_available():
@@ -2739,7 +2760,7 @@ class TrainingArguments:
 
         Calling this method will set `self.push_to_hub` to `True`, which means the `output_dir` will begin a git
         directory synced with the repo (determined by `model_id`) and the content will be pushed each time a save is
-        triggered (depending on`self.save_strategy`). Calling [`~Trainer.save_model`] will also trigger a push.
+        triggered (depending on your `self.save_strategy`). Calling [`~Trainer.save_model`] will also trigger a push.
 
         </Tip>
 
